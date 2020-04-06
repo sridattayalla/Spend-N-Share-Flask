@@ -1,5 +1,7 @@
 from flask import Flask
-from flask_restful import reqparse, abort, Resource, Api
+from flask_restful import reqparse, abort, Resource, Api, request
+from flask_restful.representations import json
+
 from connection import mydb
 
 dbCursor = mydb.cursor()
@@ -25,12 +27,9 @@ class Account(Resource):
         return {'message': "Account not found with " + args['mobileNumber'], 'code': 0}
 
     def post(self):
-        parser = reqparse.RequestParser()
-        parser.add_argument('mobileNumber', type=str)
-        parser.add_argument('name', type=str)
-        args = parser.parse_args()
+        args = request.get_json()
 
-        if(self.userExist(args['mobileNumber'])):
+        if userExist(args['mobileNumber']):
             return {'message': 'User exist', 'code': 0}
 
         sql = "INSERT INTO user (mobileNumber, name) VALUES (%s, %s)"
@@ -50,13 +49,15 @@ class Account(Resource):
         return {"message": 'Account deleted', 'code': 1}
 
 
-    def userExist(self, phoneNum):
-        sql = "select * from user where mobileNumber = "+phoneNum
-        dbCursor.execute(sql)
-        res = dbCursor.fetchall()
-        if(len(res)>0):
-            return True
-        return False
+def userExist(phoneNum):
+    sql = "select * from user where mobileNumber = "+phoneNum
+    dbCursor.execute(sql)
+    res = dbCursor.fetchall()
+
+    if(len(res)>0):
+        return True
+
+    return False
 
 
 class Group(Resource):
@@ -106,8 +107,9 @@ class Group(Resource):
         return {"message": 'Account deleted', 'code': 1}
 
 
+
 api.add_resource(Account, '/user')
 api.add_resource(Group, '/group')
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, host='0.0.0.0')
