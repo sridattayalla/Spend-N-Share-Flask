@@ -197,12 +197,37 @@ class groupUser(Resource):
 
         return {"message": "Joined successfully", "code": 1}
 
+class payment(Resource):
+    def post(self):
+        args = request.get_json()
+        sql = 'INSERT into payments (user_id, group_id, amount, purpose, time) values (%s, %s, %s, %s, %s)';
+        val = [args['userId'], args['groupId'], args['amount'], args['purpose']]
+
+        dbCursor.execute(sql, val)
+        mydb.commit()
+
+        payment_id = dbCursor.lastrowid
+        members = args['members']
+        amount = args['amount'] // (len(members)+1)
+
+        sql = 'INSERT INTO owes (user_id, payer_id, amount, payment_id)'
+        for member in members:
+            temp = ' ({}, {}, {}, {})'.format(member['userId'], args['userId'], amount, payment_id)
+            sql += temp
+
+        dbCursor.execute(sql)
+        mydb.commit()
+
+        return {"message" : "Done", "code": 1}
+
 
 api.add_resource(Account, '/user')
 api.add_resource(Group, '/group')
 api.add_resource(Groups, '/groups')
 api.add_resource(Requests, '/requests')
 api.add_resource(groupUser, '/groupUser')
+api.add_resource(payment, '/payment')
+
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0')
