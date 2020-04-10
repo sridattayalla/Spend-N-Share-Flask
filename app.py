@@ -1,6 +1,8 @@
 from flask import Flask
 from flask_restful import reqparse, abort, Resource, Api, request
 from flask_restful.representations import json
+import calendar;
+import time;
 
 from connection import mydb
 
@@ -107,6 +109,14 @@ class Group(Resource):
         mydb.commit()
         return {"message": 'Account deleted', 'code': 1}
 
+    def put(self):
+        args = request.get_json()
+        print(args)
+        sql = 'update groups set thumb = "' + args['thumb'] + '" where id = ' + str(args['groupId'])
+        dbCursor.execute(sql)
+        mydb.commit()
+        return {"message": "Image updated", "code": 1}
+
 
 class Groups(Resource):
     def get(self):
@@ -119,11 +129,37 @@ class Groups(Resource):
 
         res = []
         for each in groups:
-            id = each[0]
-            sql = 'SELECT user.name, user.thumb, user.id from user inner join group_users where group_users.group_id = ' + str(id) + ' and group_users.user_id = user.id'
+            id = str(each[0])
+            sql = 'SELECT user.name, user.thumb, user.id from user inner join group_users where group_users.group_id = ' + id + ' and group_users.user_id = user.id'
             dbCursor.execute(sql)
             members = dbCursor.fetchall()
-            res.append({'groupId': id, 'groupName': each[1], 'groupThumb': each[2], 'members': members})
+
+            sql = 'SELECT cast(sum(amount) as signed) from payments where group_id = ' + id + ' GROUP BY group_id'
+            dbCursor.execute(sql)
+            groupSpent = dbCursor.fetchall()
+            if len(groupSpent) > 0 :
+                groupSpent = groupSpent[0]
+            else:
+                groupSpent = 0
+
+            sql = 'SELECT cast(sum(amount) as signed) from payments where group_id = ' + id +' and user_id = ' + str(args['userId']) + ' GROUP by group_id'
+            dbCursor.execute(sql)
+            youSpent = dbCursor.fetchall()
+            if len(youSpent) > 0 :
+                youSpent = youSpent[0]
+            else:
+                youSpent = 0
+
+            sql = 'SELECT cast(sum(amount) as signed) from owes where user_id = ' + str(args['userId']) + ' and group_id = ' + id + ' GROUP by group_id'
+            dbCursor.execute(sql)
+            youOwe = dbCursor.fetchall()
+
+            if len(youOwe) > 0 :
+                youOwe = youOwe[0]
+            else:
+                youOwe = 0
+
+            res.append({'groupId': id, 'groupName': each[1], 'groupThumb': each[2], 'members': members, 'groupSpent': groupSpent, 'youSpent': youSpent, 'youOwe': youOwe})
 
         print(len(res))
         return {'message':  "loaded" if len(res)>0 else 'empty',
@@ -136,7 +172,7 @@ class Requests(Resource):
         parser = reqparse.RequestParser()
         parser.add_argument('userId', type=int)
         args = parser.parse_args()
-        sql = 'SELECT r.id as id, g.id as groupId, g.name as groupName, g.thumb as groupThumb, u.name as senderName from join_requests r inner join groups g on g.id = r.group_id inner join user u on u.id = r.sender_id where r.joiner_id = ' + str(args['userId'])
+        sql = 'SELECT r.id, g.id , g.name , g.thumb , u.name from join_requests r inner join groups g on g.id = r.group_id inner join user u on u.id = r.sender_id where r.joiner_id = ' + str(args['userId'])
         dbCursor.execute(sql)
         res = dbCursor.fetchall()
 
@@ -148,6 +184,21 @@ class Requests(Resource):
 
     def post(self):
         args = request.get_json()
+        print(args)
+        sql = 'SELECT * from join_requests where group_id = %s and joiner_id=%s'
+        val= [args['groupId'], args['joinerId']]
+
+        dbCursor.execute(sql, val)
+        res = dbCursor.fetchall()
+        if(len(res)>0):
+            return {"message": 'Request already sent', "code": 0}
+
+        sql = 'SELECT * from group_users where group_id = %s and user_id = %s'
+        val= [args['groupId'], args['joinerId']]
+        dbCursor.execute(sql, val)
+        res = dbCursor.fetchall()
+        if (len(res) > 0):
+            return {"message": 'Already a member', "code": 0}
 
         sql = 'INSERT into join_requests (group_id, joiner_id, sender_id) values (%s , %s , %s)'
 
@@ -160,11 +211,10 @@ class Requests(Resource):
     def delete(self):
         args = request.get_json()
 
-        sql = 'DELETE from join_requests where id = ' + args['id']
+        sql = 'DELETE from join_requests where id = ' + str(args['id'])
         dbCursor.execute(sql)
         mydb.commit()
         return {"message": "removed"}
-
 
 class groupUser(Resource):
     def get(self):
@@ -195,31 +245,104 @@ class groupUser(Resource):
         dbCursor.execute(sql, val)
         mydb.commit()
 
-        return {"message": "Joined successfully", "code": 1}
+        response = {"message": "Joined successfully", "code": 1}
+        print(response)
+        return response
 
 class payment(Resource):
+    def get(self):
+        parser = reqparse.RequestParser()
+        parser.add_argument('groupId', type=int)
+        args = parser.parse_args()
+
+        sql = 'SELECT u.name, u.thumb, p.purpose, p.amount, p.time from payments p inner join user u on (p.user_id = u.id and p.group_id = '+ str(args['groupId']) +') order by time desc  '
+        dbCursor.execute(sql)
+        res = dbCursor.fetchall()
+
+        return {
+            "message": "Found payments" if len(res)>0 else "empty",
+            "code": 1 if len(res)>0 else 0,
+            "data": res
+        }
+
+
     def post(self):
         args = request.get_json()
+        print(args)
         sql = 'INSERT into payments (user_id, group_id, amount, purpose, time) values (%s, %s, %s, %s, %s)';
-        val = [args['userId'], args['groupId'], args['amount'], args['purpose']]
+        ts = calendar.timegm(time.gmtime())
+        val = [args['userId'], args['groupId'], args['amount'], args['purpose'], ts]
 
         dbCursor.execute(sql, val)
         mydb.commit()
 
         payment_id = dbCursor.lastrowid
         members = args['members']
-        amount = args['amount'] // (len(members)+1)
+        amount = int(args['amount']) // (len(members)+1)
 
-        sql = 'INSERT INTO owes (user_id, payer_id, amount, payment_id)'
+        sql = 'INSERT INTO owes (user_id, payer_id, amount, payment_id, group_id) values'
         for member in members:
-            temp = ' ({}, {}, {}, {})'.format(member['userId'], args['userId'], amount, payment_id)
+            temp = ' ({}, {}, {}, {}, {}),'.format(member, args['userId'], amount, payment_id, args['groupId'])
             sql += temp
+
+        sql = sql[0: -1]
+        print(sql)
 
         dbCursor.execute(sql)
         mydb.commit()
 
         return {"message" : "Done", "code": 1}
 
+class Search(Resource):
+    def get(self):
+        cur = mydb.cursor()
+        parser = reqparse.RequestParser()
+        parser.add_argument('key', type=str)
+        parser.add_argument('groupId', type=int)
+        args = parser.parse_args()
+
+        sql = "SELECT * from user where mobileNumber like '%" + args['key'] + "%'"
+        # val = [args['groupId'], args['key']]
+        cur.execute(sql)
+
+        res = cur.fetchall()
+        cur.close()
+        print(res)
+        return {
+            "message": "results found" if len(res)>0 else "empty",
+            "code": 1 if len(res)>0 else 0,
+            "data": res
+        }
+
+class Owe(Resource):
+    def get(self):
+        parser = reqparse.RequestParser()
+        parser.add_argument('groupId', type=int)
+        parser.add_argument('userId', type=int)
+        args = parser.parse_args()
+
+        sql = 'SELECT o.payer_id, u.thumb, u.name, cast(sum(o.amount) as signed) from owes o inner join user u where (o.payer_id = u.id and o.group_id=%s and o.user_id = %s) group by o.payer_id'
+        val = [args['groupId'], args['userId']]
+        dbCursor.execute(sql, val)
+
+        res = dbCursor.fetchall()
+
+        sql = 'SELECT u.name, u.thumb, p.purpose, p.amount, p.time from payments p inner join user u on (p.user_id = u.id and p.group_id = ' + str(
+            args['groupId']) + ') order by time desc  '
+        dbCursor.execute(sql)
+        res0 = dbCursor.fetchall()
+
+        print(res)
+
+        return [{
+            "message": "found owes" if len(res)>0 else "empty",
+            "data": res,
+            "code": 1 if len(res)>0 else 0
+        }, {
+            "message": "Found payments" if len(res0)>0 else "empty",
+            "code": 1 if len(res0)>0 else 0,
+            "data": res0
+        }]
 
 api.add_resource(Account, '/user')
 api.add_resource(Group, '/group')
@@ -227,6 +350,8 @@ api.add_resource(Groups, '/groups')
 api.add_resource(Requests, '/requests')
 api.add_resource(groupUser, '/groupUser')
 api.add_resource(payment, '/payment')
+api.add_resource(Search, '/search')
+api.add_resource(Owe, '/owe')
 
 
 if __name__ == '__main__':
